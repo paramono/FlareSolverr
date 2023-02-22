@@ -1,10 +1,11 @@
 import logging
 import sys
 import time
+from typing import Optional
 from urllib.parse import unquote
 
 from func_timeout import func_timeout, FunctionTimedOut
-from selenium.common import TimeoutException
+from selenium.common import TimeoutException, InvalidCookieDomainException, WebDriverException
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
@@ -181,6 +182,8 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
 
 
 def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> ChallengeResolutionT:
+    _add_cookies(driver, req.url, req.cookies)
+
     res = ChallengeResolutionT({})
     res.status = STATUS_OK
     res.message = ""
@@ -305,3 +308,21 @@ def _post_request(req: V1RequestBase, driver: WebDriver):
         </body>
         </html>"""
     driver.get("data:text/html;charset=utf-8," + html_content)
+
+
+def _add_cookies(driver: WebDriver, url: str, cookies: Optional[list]):
+    if cookies is None:
+        return
+
+    # Enables network tracking so we may use Network.setCookie method
+    driver.execute_cdp_cmd('Network.enable', {})
+
+    try:
+        for cookie in cookies:
+            driver.execute_cdp_cmd('Network.setCookie', cookie)
+    except WebDriverException as e:
+        logging.error("Failed to add cookies %s" % e)
+        raise Exception("Failed to add cookies: %s" % e.msg)
+    finally:
+        # Disable network tracking
+        driver.execute_cdp_cmd('Network.disable', {})
