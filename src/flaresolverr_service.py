@@ -3,6 +3,7 @@ import sys
 import time
 from typing import Optional
 from urllib.parse import unquote
+from uuid import uuid1
 
 from func_timeout import func_timeout, FunctionTimedOut
 from selenium.common import TimeoutException, InvalidCookieDomainException, WebDriverException
@@ -40,6 +41,8 @@ CHALLENGE_SELECTORS = [
     'td.info #js_info'
 ]
 SHORT_TIMEOUT = 10
+
+SESSIONS_STORAGE = {}
 
 
 def test_browser_installation():
@@ -115,11 +118,11 @@ def _controller_v1_handler(req: V1RequestBase) -> V1ResponseBase:
     # execute the command
     res: V1ResponseBase
     if req.cmd == 'sessions.create':
-        raise Exception("Not implemented yet.")
+        res = _cmd_sessions_create(req)
     elif req.cmd == 'sessions.list':
-        raise Exception("Not implemented yet.")
+        res = _cmd_sessions_list(req)
     elif req.cmd == 'sessions.destroy':
-        raise Exception("Not implemented yet.")
+        res = _cmd_sessions_destroy(req)
     elif req.cmd == 'request.get':
         res = _cmd_request_get(req)
     elif req.cmd == 'request.post':
@@ -170,14 +173,20 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
     timeout = req.maxTimeout / 1000
     driver = None
     try:
-        driver = utils.get_webdriver()
+        if req.session:
+            if req.session in SESSIONS_STORAGE:
+                driver = SESSIONS_STORAGE[req.session]
+            else:
+                raise Exception("This session does not exist. Use 'list_sessions' to see all the existing sessions.")
+        else:
+            driver = utils.get_webdriver()
         return func_timeout(timeout, _evil_logic, (req, driver, method))
     except FunctionTimedOut:
         raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
     except Exception as e:
         raise Exception('Error solving the challenge. ' + str(e))
     finally:
-        if driver is not None:
+        if not req.session and driver is not None:
             driver.quit()
 
 
@@ -326,3 +335,35 @@ def _add_cookies(driver: WebDriver, url: str, cookies: Optional[list]):
     finally:
         # Disable network tracking
         driver.execute_cdp_cmd('Network.disable', {})
+
+
+def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
+    logging.debug("Creating new session...")
+    session_id = req.session or str(uuid1())
+    driver = utils.get_webdriver()
+    SESSIONS_STORAGE[session_id] = driver
+    return V1ResponseBase({
+        "status": STATUS_OK,
+        "message": "Session created successfully.",
+        "session": session_id
+    })
+
+
+def _cmd_sessions_list(req: V1RequestBase) -> V1ResponseBase:
+    return V1ResponseBase({
+        "status": STATUS_OK,
+        "message": "",
+        "sessions": list(SESSIONS_STORAGE.keys())
+    })
+
+
+def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
+    if req.session in SESSIONS_STORAGE:
+        driver = SESSIONS_STORAGE.pop(req.session)
+        driver.quit()
+        return V1ResponseBase({
+            "status": STATUS_OK,
+            "message": "The session has been removed."
+        })
+    else:
+        raise Exception("This session does not exist.")
